@@ -6,12 +6,16 @@
 import { validateOpenAiKey } from "./transcribe.js";
 
 const keyInput = document.getElementById("key");
+const baseUrlInput = document.getElementById("baseUrl");
 const keyStatus = document.getElementById("keyStatus");
 
-// ---- API key ----
-chrome.storage.local.get("openai_api_key").then(({ openai_api_key }) => {
-  if (openai_api_key) keyInput.value = openai_api_key;
-});
+// ---- API key + base URL ----
+chrome.storage.local
+  .get(["openai_api_key", "openai_base_url"])
+  .then(({ openai_api_key, openai_base_url }) => {
+    if (openai_api_key) keyInput.value = openai_api_key;
+    if (openai_base_url) baseUrlInput.value = openai_base_url;
+  });
 
 document.getElementById("reveal").addEventListener("click", () => {
   keyInput.type = keyInput.type === "password" ? "text" : "password";
@@ -50,12 +54,13 @@ document.getElementById("mic").addEventListener("click", async () => {
 
 document.getElementById("save").addEventListener("click", async () => {
   const key = keyInput.value.trim();
+  const baseUrl = baseUrlInput.value.trim();
   keyStatus.textContent = "Validating…";
   keyStatus.className = "status";
-  const v = await validateOpenAiKey(key);
+  const v = await validateOpenAiKey(key, baseUrl);
   if (v.ok) {
-    await chrome.storage.local.set({ openai_api_key: key });
-    keyStatus.textContent = "Saved and valid.";
+    await chrome.storage.local.set({ openai_api_key: key, openai_base_url: baseUrl });
+    keyStatus.textContent = baseUrl ? `Saved and valid (${baseUrl}).` : "Saved and valid.";
     keyStatus.className = "status ok";
   } else {
     keyStatus.textContent = v.error;

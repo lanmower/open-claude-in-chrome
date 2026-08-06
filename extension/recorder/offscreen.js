@@ -172,6 +172,7 @@ async function startRecording(cmd) {
     started_at: cmd.started_at, // epoch ms — shared clock zero
     segments: [],
     apiKey: cmd.apiKey,
+    baseUrl: cmd.baseUrl || "",
     url0: cmd.url0 || null
   };
 
@@ -299,6 +300,7 @@ async function stopRecording() {
   pendingStop = {
     recording_id: s.recording_id,
     apiKey: s.apiKey,
+    baseUrl: s.baseUrl,
     trace,
     segBlobs,
     imageRows
@@ -354,14 +356,14 @@ function audioSlice(msg) {
 // nothing around it — a failure is a hole, never a drift.
 async function transcribeRecording() {
   if (!pendingStop) return { ok: false, error: "nothing to transcribe" };
-  const { trace, segBlobs, apiKey, recording_id, imageRows } = pendingStop;
+  const { trace, segBlobs, apiKey, baseUrl, recording_id, imageRows } = pendingStop;
 
   const segStatuses = [];
   let cognitive = [];
   for (const seg of segBlobs) {
     const t0 = seg.startEpoch - trace.started_at;
     try {
-      const r = await transcribe(seg.blob, apiKey, { filename: `${seg.index}.webm` });
+      const r = await transcribe(seg.blob, apiKey, { filename: `${seg.index}.webm`, baseUrl });
       cognitive = cognitive.concat(
         segmentsToCognitive(r.segments, seg.startEpoch, trace.started_at)
       );
@@ -467,7 +469,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!msg || msg.__ocic_offscreen !== true) return;
   (async () => {
     try {
-      if (msg.cmd === "probe_key") sendResponse(await validateOpenAiKey(msg.apiKey));
+      if (msg.cmd === "probe_key") sendResponse(await validateOpenAiKey(msg.apiKey, msg.baseUrl));
       else if (msg.cmd === "start") sendResponse(await startRecording(msg));
       else if (msg.cmd === "event") sendResponse(await addEvent(msg.event));
       else if (msg.cmd === "cursor") sendResponse(await addCursor(msg.points));

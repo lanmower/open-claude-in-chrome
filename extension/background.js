@@ -286,6 +286,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   }
   consoleMessages.delete(tabId);
   networkRequests.delete(tabId);
+  rawCdpEvents.delete(tabId);
 });
 
 // Handle user dismissing debugger bar
@@ -294,8 +295,23 @@ chrome.debugger.onDetach.addListener((source, reason) => {
 });
 
 // --- CDP event listeners for console and network ---
+// Raw CDP event buffer for the gm-browser-verb adapter (Tracing.dataCollected,
+// Profiler events, etc — anything the typed tools above don't already bucket
+// into consoleMessages/networkRequests). Capped hard since Tracing can be
+// very chatty; the adapter drains and clears it per-dispatch via
+// _gm_cdp_drain_events, so steady-state size stays small.
+const rawCdpEvents = new Map(); // tabId -> [{method, params, ts}]
+const RAW_CDP_EVENTS_CAP = 20000;
+
 chrome.debugger.onEvent.addListener((source, method, params) => {
   const tabId = source.tabId;
+
+  if (method === "Tracing.dataCollected" || method === "Tracing.tracingComplete" || method.startsWith("Profiler.")) {
+    const buf = rawCdpEvents.get(tabId) || [];
+    buf.push({ method, params, ts: Date.now() });
+    if (buf.length > RAW_CDP_EVENTS_CAP) buf.splice(0, buf.length - RAW_CDP_EVENTS_CAP);
+    rawCdpEvents.set(tabId, buf);
+  }
 
   if (method === "Console.messageAdded" && params.message) {
     const msgs = consoleMessages.get(tabId) || [];
@@ -1192,6 +1208,27 @@ const toolHandlers = {
     text += "\nPlan auto-approved (no permission restrictions in this extension).";
     return { content: [{ type: "text", text }] };
   },
+
+  // Internal-only tool, not part of the public 18: a raw CDP command
+  // passthrough for the gm-browser-verb adapter (host/gm-browser-verb.js),
+  // which needs domains (Profiler, Tracing, Page.addScriptToEvaluateOnNewDocument)
+  // the typed tools above don't expose. Not registered in tool-definitions.js
+  // so it never appears in the public MCP tool list.
+  async _gm_cdp_raw(args) {
+    const { tabId, method, params } = args;
+    const result = await cdp(tabId, method, params || {});
+    return { content: [{ type: "text", text: JSON.stringify(result ?? null) }] };
+  },
+
+  // Drains and clears the raw CDP event buffer for a tab (Tracing/Profiler
+  // events) — paired with _gm_cdp_raw for the trace/profile modes, which need
+  // the events a single sendCommand response doesn't carry.
+  async _gm_cdp_drain_events(args) {
+    const { tabId } = args;
+    const events = rawCdpEvents.get(tabId) || [];
+    rawCdpEvents.set(tabId, []);
+    return { content: [{ type: "text", text: JSON.stringify(events) }] };
+  },
 };
 
 // --- Tool dispatch ---
@@ -1349,6 +1386,11 @@ async function getApiKey() {
   return openai_api_key || "";
 }
 
+async function getBaseUrl() {
+  const { openai_base_url } = await chrome.storage.local.get("openai_base_url");
+  return openai_base_url || "";
+}
+
 // Validate the key BEFORE any recording — a recording with no transcript path
 // is a poor outcome, so we fail fast (§5).
 //
@@ -1357,17 +1399,18 @@ async function getApiKey() {
 // endpoint returns 200 for a key whose credit balance is exhausted, so it once
 // green-lit a 43-minute narrated recording that could never be transcribed.
 // Authentication is not capability.
-async function validateKey(apiKey) {
-  if (!apiKey) return { ok: false, error: "No OpenAI API key set. Add one in the extension options." };
+async function validateKey(apiKey, baseUrl) {
+  if (!apiKey) return { ok: false, error: "No transcription API key set. Add one in the extension options." };
   try {
     await ensureOffscreen();
     const r = await chrome.runtime.sendMessage({
       __ocic_offscreen: true,
       cmd: "probe_key",
-      apiKey
+      apiKey,
+      baseUrl
     });
     if (r && r.ok) return { ok: true };
-    return { ok: false, error: (r && r.error) || "OpenAI transcription is unavailable." };
+    return { ok: false, error: (r && r.error) || "Transcription is unavailable." };
   } catch (e) {
     return { ok: false, error: `Could not reach OpenAI: ${e.message}` };
   }
@@ -1485,7 +1528,8 @@ async function startRecording() {
   // network call — so the icon never looks dead after a press.
   setProcessingBadge("Starting… validating key and warming up the microphone");
   const apiKey = await getApiKey();
-  const v = await validateKey(apiKey);
+  const baseUrl = await getBaseUrl();
+  const v = await validateKey(apiKey, baseUrl);
   if (!v.ok) {
     // Surface via badge + a notification-free options nudge.
     chrome.action.setTitle({ title: `Cannot record: ${v.error}` });
@@ -1507,6 +1551,7 @@ async function startRecording() {
     recording_id: recorder.recordingId,
     started_at: recorder.startedAt,
     apiKey,
+    baseUrl,
     url0
   });
   // Split-brain heal: the offscreen doc already has a live session (we lost

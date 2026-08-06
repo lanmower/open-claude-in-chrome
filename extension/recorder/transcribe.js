@@ -9,7 +9,15 @@
 // Dependency-free (uses fetch + FormData, present in the offscreen document
 // and in Node 18+), so it is unit-testable outside the browser.
 
-const OPENAI_TRANSCRIBE_URL = "https://api.openai.com/v1/audio/transcriptions";
+const DEFAULT_BASE_URL = "https://api.openai.com/v1";
+
+// Any OpenAI-compatible endpoint (self-hosted Whisper, Azure OpenAI,
+// OpenRouter, ...) can be substituted via the options page's Base URL field;
+// this just appends the fixed transcription path onto whatever base is set.
+function transcribeUrl(baseUrl) {
+  const base = (baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, "");
+  return `${base}/audio/transcriptions`;
+}
 
 // OpenAI rejects uploads above this. Segment rotation keeps every piece an
 // order of magnitude below it; this is the last line of defence, and it fails
@@ -27,15 +35,15 @@ const MAX_ATTEMPTS = 3;
 export function describeFailure(status, body) {
   const b = String(body || "");
   if (/insufficient_quota|credit_balance_exhausted/i.test(b))
-    return "the OpenAI account has no credits left";
+    return "the account has no credits left";
   if (/model_not_found|does not have access/i.test(b))
-    return "this OpenAI key cannot access whisper-1";
-  if (status === 401) return "the OpenAI API key is invalid";
-  if (status === 429) return "OpenAI rate-limited the request";
+    return "this key cannot access whisper-1 on the configured endpoint";
+  if (status === 401) return "the API key is invalid for the configured endpoint";
+  if (status === 429) return "the transcription endpoint rate-limited the request";
   if (status === 413) return "the audio segment was rejected as too large";
-  if (status >= 500) return `OpenAI had a server error (${status})`;
-  if (status) return `OpenAI returned ${status}`;
-  return "the request to OpenAI failed";
+  if (status >= 500) return `the transcription endpoint had a server error (${status})`;
+  if (status) return `the transcription endpoint returned ${status}`;
+  return "the request to the transcription endpoint failed";
 }
 
 // A short silent WAV, built by hand so the capability probe needs no assets.
@@ -72,7 +80,7 @@ function silentWav(seconds = 0.3, rate = 8000) {
  * Costs a fraction of a cent (a 0.3s clip) once per recording start.
  * Returns { ok: true } or { ok: false, error }.
  */
-export async function validateOpenAiKey(apiKey) {
+export async function validateOpenAiKey(apiKey, baseUrl) {
   if (!apiKey || typeof apiKey !== "string" || !apiKey.trim()) {
     return { ok: false, error: "No API key provided." };
   }
@@ -81,7 +89,7 @@ export async function validateOpenAiKey(apiKey) {
   form.append("model", "whisper-1");
   form.append("response_format", "json");
   try {
-    const res = await fetch(OPENAI_TRANSCRIBE_URL, {
+    const res = await fetch(transcribeUrl(baseUrl), {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey.trim()}` },
       body: form
@@ -90,7 +98,7 @@ export async function validateOpenAiKey(apiKey) {
     const body = await res.text().catch(() => "");
     return { ok: false, error: describeFailure(res.status, body) };
   } catch (e) {
-    return { ok: false, error: `could not reach OpenAI (${e.message})` };
+    return { ok: false, error: `could not reach the transcription endpoint (${e.message})` };
   }
 }
 
@@ -100,12 +108,12 @@ export async function validateOpenAiKey(apiKey) {
  * failure (bad key, no credits) throws immediately rather than burning time.
  * @returns {Promise<{ text, duration, words, segments }>}
  */
-export async function transcribe(audio, apiKey, { filename = "audio.webm" } = {}) {
+export async function transcribe(audio, apiKey, { filename = "audio.webm", baseUrl } = {}) {
   const blob =
     audio instanceof Blob ? audio : new Blob([audio], { type: "audio/webm" });
   if (blob.size > MAX_UPLOAD_BYTES) {
     throw new Error(
-      `the audio segment was ${(blob.size / 1048576).toFixed(1)}MB, over OpenAI's 25MB limit`
+      `the audio segment was ${(blob.size / 1048576).toFixed(1)}MB, over the 25MB limit`
     );
   }
 
@@ -120,13 +128,13 @@ export async function transcribe(audio, apiKey, { filename = "audio.webm" } = {}
     form.append("timestamp_granularities[]", "word");
     let res;
     try {
-      res = await fetch(OPENAI_TRANSCRIBE_URL, {
+      res = await fetch(transcribeUrl(baseUrl), {
         method: "POST",
         headers: { Authorization: `Bearer ${apiKey.trim()}` },
         body: form
       });
     } catch (e) {
-      lastErr = new Error(`could not reach OpenAI (${e.message})`);
+      lastErr = new Error(`could not reach the transcription endpoint (${e.message})`);
       continue; // network blips are worth a retry
     }
     if (res.ok) {

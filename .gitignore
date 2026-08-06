@@ -20,3 +20,8 @@ benchmark/__pycache__/
 
 # personal research data — never commit
 DO_NOT_COMMIT/
+
+# gm orchestration runtime state (spool, kv cache) — not project source
+.gm/
+.agentplug-kv/
+*.stackdump

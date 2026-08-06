@@ -98,10 +98,13 @@
   <h1>Open Claude in Chrome — Recorder</h1>
   <p class="sub">Record an expert browser rollout (behavior + narration) and hand it to a live Claude Code session. Click the toolbar icon to start/stop a recording.</p>
 
-  <h2>OpenAI API key</h2>
+  <h2>Transcription (speech-to-text)</h2>
   <div class="card">
-    <label for="key">Required before recording (used for speech-to-text)</label>
+    <label for="key">API key, required before recording</label>
     <input id="key" type="password" placeholder="sk-..." autocomplete="off">
+    <label for="baseUrl" style="margin-top:14px">Base URL</label>
+    <input id="baseUrl" type="text" placeholder="https://api.openai.com/v1" autocomplete="off">
+    <p class="sub" style="margin:6px 0 0">Defaults to OpenAI. Point this at any OpenAI-compatible transcription endpoint instead — a self-hosted Whisper server, Azure OpenAI, OpenRouter, etc. The path <code>/audio/transcriptions</code> is appended automatically.</p>
     <div class="row">
       <button id="save">Save &amp; validate</button>
       <button id="reveal" class="sec" type="button">Show</button>

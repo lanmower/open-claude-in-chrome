@@ -239,6 +239,48 @@ To keep it reliable:
    sidecar looks like "code mode stopped working", not "the browser stopped
    working".
 
+## gm browser-verb adapter
+
+`host/gm-browser-verb.js` is a drop-in replacement for the `browser` spool
+verb driven by [gm](https://github.com/AnEntrypoint/gm)'s
+`agentplug-host/src/browser.rs` — same plain-text prefix-stacked body
+grammar (`session new/list/close/reset`, `sessionId=`, `timeout=`, `url=`,
+`capture`/`profile`/`trace`/`screenshot`/`dom=`, `viewport=`), same JSON
+response envelope (`ok`/`result`/`debug`/`session_id`/`profile`/`trace`/
+`screenshot_path`/`elements`/...), backed by this repo's extension +
+native-messaging CDP path instead of a Chrome process gm launches itself.
+
+Run it against any gm project:
+
+```bash
+node /absolute/path/to/host/gm-browser-verb.js --cwd=/path/to/gm-project
+```
+
+It watches `<cwd>/.gm/exec-spool/in/browser/<N>.txt`, evaluates the body
+against the shared browser this repo already drives, and writes
+`<cwd>/.gm/exec-spool/out/browser-<N>.json` — the same files gm's own
+`instruction`/`transition` verbs read and write, so a gm session pointed at
+a project using this adapter needs no changes to its own dispatch code.
+
+**Known divergences from gm's Chrome-process-per-session model** (call
+these out, don't paper over them):
+
+- **One shared, always-headed browser, not one Chrome process per
+  session.** gm's `browser.rs` launches a dedicated Chromium per
+  `session_id`; this adapter has exactly one already-running browser (the
+  user's, with the extension loaded). A "session" here is a tab in the MCP
+  tab group, not a spawned process — `session new` opens a tab, `session
+  close` closes it.
+- **`headless` is inapplicable.** There is no launch to make headless; the
+  config field is accepted (for parity with `.gm/browser-config.json`) but
+  has no effect.
+- **`viewport=` reuses the same `Emulation.setDeviceMetricsOverride` path
+  as the `resize_window` tool**, not a fresh-launch viewport flag.
+- **`profile`/`trace` modes drive `Profiler`/`Tracing` CDP domains through
+  an internal, non-public tool** (`_gm_cdp_raw` in
+  `extension/background.js`) added specifically for this adapter — those
+  two domains aren't reachable through any of the 18 public MCP tools.
+
 ## Server variants
 
 The hybrid server from Step 6 is the superset and the one the install steps
